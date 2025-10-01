@@ -81,22 +81,28 @@ if daily_file and txn_file:
                     cleaned_rows.append(dict(template_row))
                     notes.append({"Accession": accession, "Action": f"Added missing code {code}"})
 
-        # Final cleaned DataFrame
-        cleaned_daily_df = pd.DataFrame(cleaned_rows)
-
-        st.subheader("📑 Cleaned Daily Log Report")
-        st.dataframe(cleaned_daily_df.head())
-
-        # Download option
-        output = BytesIO()
-        cleaned_daily_df.to_excel(output, index=False)
-        st.download_button(
-            label="📥 Download Cleaned Daily Log Report",
-            data=output.getvalue(),
-            file_name="Cleaned_Daily_Log_Report.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-
+    # Final cleaned DataFrame
+    cleaned_daily_df = pd.DataFrame(cleaned_rows)
+    
+    # ✅ Format all date columns as MM/DD/YYYY
+    for col in cleaned_daily_df.columns:
+        if "date" in col.lower():
+            cleaned_daily_df[col] = pd.to_datetime(
+                cleaned_daily_df[col], errors="coerce"
+            ).dt.strftime("%m/%d/%Y")
+    
+    st.subheader("📑 Cleaned Daily Log Report")
+    st.dataframe(cleaned_daily_df.head())
+    
+    # Download option
+    output = BytesIO()
+    cleaned_daily_df.to_excel(output, index=False)
+    st.download_button(
+        label="📥 Download Cleaned Daily Log Report",
+        data=output.getvalue(),
+        file_name="Cleaned_Daily_Log_Report.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
     # ========== TAB 2: DISCREPANCY NOTES ==========
     with tab2:
         st.subheader("📝 Discrepancy Notes")
@@ -145,3 +151,4 @@ if daily_file and txn_file:
 
         cpt_recon_df = pd.DataFrame(recon_rows)
         st.dataframe(cpt_recon_df)
+
