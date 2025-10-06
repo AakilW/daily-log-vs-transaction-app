@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 import pandas as pd
 from io import BytesIO
@@ -158,4 +157,3 @@ if daily_file and txn_file:
 
         cpt_recon_df = pd.DataFrame(recon_rows)
         st.dataframe(cpt_recon_df)
-```
