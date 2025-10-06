@@ -3,89 +3,142 @@ import pandas as pd
 from io import BytesIO
 
 st.set_page_config(page_title="Daily Log vs Transaction Report", layout="wide")
-st.title("⚡ Fast Daily Log vs Transaction Comparator")
+st.title("🔍 Daily Log vs Transaction Report Comparator")
 
-@st.cache_data(show_spinner=False)
-def load_excel(file, usecols):
-    return pd.read_excel(file, dtype=str, usecols=usecols, engine="openpyxl")
-
-@st.cache_data(show_spinner=False)
-def process_files(daily_df, txn_df):
-    daily_df = daily_df.fillna("").astype(str)
-    txn_df = txn_df.fillna("").astype(str)
-
-    # Filter required columns only
-    daily_subset = daily_df[["Accession", "Test Code"]].copy()
-    txn_subset = txn_df[["Inv.#", "Code", "TestName"]].copy()
-
-    # Strip and normalize
-    for df in [daily_subset, txn_subset]:
-        for c in df.columns:
-            df[c] = df[c].str.strip()
-
-    # Build maps using vectorized operations
-    daily_map = daily_subset.groupby("Accession")["Test Code"].agg(set).to_dict()
-    txn_map = txn_subset.groupby("Inv.#")["Code"].agg(set).to_dict()
-    txn_test_map = txn_subset.set_index(["Inv.#", "Code"])["TestName"].to_dict()
-
-    # Vectorized merge to detect matches
-    merged = daily_df.merge(
-        txn_subset.rename(columns={"Inv.#": "Accession", "Code": "Test Code"}),
-        on=["Accession", "Test Code"],
-        how="outer",
-        indicator=True,
-        suffixes=("", "_txn")
-    )
-
-    # Fill missing test names
-    merged["Test Name"] = merged.apply(
-        lambda r: txn_test_map.get((r["Accession"], r["Test Code"]), r.get("Test Name")),
-        axis=1
-    )
-
-    # Notes for discrepancies
-    notes = []
-    for acc, codes in daily_map.items():
-        if acc not in txn_map:
-            notes.append({"Accession": acc, "Action": "Accession not in Transaction Report"})
-        else:
-            missing_codes = codes - txn_map[acc]
-            for c in missing_codes:
-                notes.append({"Accession": acc, "Action": f"Removed code {c}"})
-    for acc, codes in txn_map.items():
-        missing_codes = codes - daily_map.get(acc, set())
-        for c in missing_codes:
-            notes.append({"Accession": acc, "Action": f"Added missing code {c}"})
-
-    cleaned = merged.drop(columns=["_merge", "TestName_txn"], errors="ignore")
-
-    # Format all date-like columns fast
-    date_cols = [c for c in cleaned.columns if any(x in c.lower() for x in ["date", "dob", "collected", "received", "billed"])]
-    for c in date_cols:
-        cleaned[c] = pd.to_datetime(cleaned[c], errors="coerce").dt.strftime("%m/%d/%Y")
-
-    return cleaned, pd.DataFrame(notes)
-
-# File upload
-daily_file = st.file_uploader("Upload Daily Log Report", type=["xlsx"])
-txn_file = st.file_uploader("Upload Transaction Report", type=["xlsx"])
+# Upload files
+daily_file = st.file_uploader("Upload Daily Log Report", type=["xlsx", "xls"])
+txn_file = st.file_uploader("Upload Transaction Report", type=["xlsx", "xls"])
 
 if daily_file and txn_file:
-    with st.spinner("Processing..."):
-        daily_df = load_excel(daily_file, ["Accession", "Test Code"])
-        txn_df = load_excel(txn_file, ["Inv.#", "Code", "TestName"])
-        cleaned_df, notes_df = process_files(daily_df, txn_df)
+    # Read files
+    daily_df = pd.read_excel(daily_file, dtype=str, engine="openpyxl")
+    txn_df = pd.read_excel(txn_file, dtype=str, engine="openpyxl")
 
-    st.success("✅ Cleaned file ready!")
+    tab1, tab2, tab3 = st.tabs(["📑 Cleaned Daily Log", "📝 Discrepancy Notes", "📊 Reconciliation"])
 
-    st.download_button(
-        "📥 Download Cleaned Daily Log",
-        data=cleaned_df.to_excel(BytesIO(), index=False),
-        file_name="Cleaned_Daily_Log.xlsx"
-    )
+    # ========== TAB 1: CLEANED DAILY LOG ==========
+    with tab1:
+        st.subheader("Preview of Uploaded Reports")
+        st.write("**Daily Log Report**", daily_df.head())
+        st.write("**Transaction Report**", txn_df.head())
 
-    st.download_button(
-        "📥 Download Discrepancy Notes",
-        data=notes_df.to_excel(BytesIO(), index=False),
-        file_name="Discrepancy_Notes.xlsx"
-    )
+        # Extract required columns
+        daily_subset = daily_df[["Accession", "Test Code"]].dropna()
+        txn_subset = txn_df[["Inv.#", "Code", "TestName"]].dropna()
+
+        # Normalize values
+        for col in ["Test Code", "Accession"]:
+            daily_subset[col] = daily_subset[col].astype(str).str.strip()
+        for col in ["Code", "Inv.#"]:
+            txn_subset[col] = txn_subset[col].astype(str).str.strip()
+
+        # Build maps
+        daily_map = daily_subset.groupby("Accession")["Test Code"].apply(set).to_dict()
+        txn_map = txn_subset.groupby("Inv.#")["Code"].apply(set).to_dict()
+        txn_testname_map = txn_subset.set_index(["Inv.#", "Code"])["TestName"].to_dict()
+
+        notes = []
+        cleaned_rows = []
+
+        # Iterate through Daily Log
+        for _, row in daily_df.iterrows():
+            accession = str(row["Accession"]).strip()
+            code = str(row.get("Test Code", "")).strip()
+            row_dict = row.to_dict()
+
+            if accession in txn_map:
+                if code in txn_map[accession]:
+                    # ✅ Code exists in both
+                    row_dict["Test Name"] = txn_testname_map.get((accession, code), row_dict.get("Test Name", None))
+                    cleaned_rows.append(row_dict)
+                else:
+                    notes.append({"Accession": accession, "Action": f"Removed code {code}"})
+            else:
+                notes.append({"Accession": accession, "Action": "Accession not in Transaction Report (kept)"})
+                cleaned_rows.append(row_dict)
+
+        # Add missing codes from Transaction Report
+        for accession, txn_codes in txn_map.items():
+            daily_codes = daily_map.get(accession, set())
+            missing_codes = txn_codes - daily_codes
+            if missing_codes:
+                for code in missing_codes:
+                    if accession in daily_df["Accession"].astype(str).values:
+                        template_row = daily_df[daily_df["Accession"].astype(str) == accession].iloc[0].to_dict()
+                    else:
+                        template_row = {col: None for col in daily_df.columns}
+                        template_row["Accession"] = accession
+
+                    template_row["Test Code"] = code
+                    template_row["Test Name"] = txn_testname_map.get((accession, code), None)
+                    cleaned_rows.append(dict(template_row))
+                    notes.append({"Accession": accession, "Action": f"Added missing code {code}"})
+
+        # Final cleaned DataFrame
+        cleaned_daily_df = pd.DataFrame(cleaned_rows)
+
+        # Format all date columns as MM/DD/YYYY
+        for col in cleaned_daily_df.columns:
+            if any(x in col.lower() for x in ["date", "dob", "collected", "received", "billed"]):
+                cleaned_daily_df[col] = pd.to_datetime(cleaned_daily_df[col], errors="coerce").dt.strftime("%m/%d/%Y")
+
+        st.subheader("📑 Cleaned Daily Log Report")
+        st.dataframe(cleaned_daily_df.head())
+
+        # ✅ Proper download button
+        output = BytesIO()
+        cleaned_daily_df.to_excel(output, index=False, engine="openpyxl")
+        output.seek(0)  # Important: move cursor to start of BytesIO
+        st.download_button(
+            label="📥 Download Cleaned Daily Log Report",
+            data=output,
+            file_name="Cleaned_Daily_Log_Report.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    # ========== TAB 2: DISCREPANCY NOTES ==========
+    with tab2:
+        st.subheader("📝 Discrepancy Notes")
+        notes_df = pd.DataFrame(notes)
+        if not notes_df.empty:
+            st.dataframe(notes_df)
+        else:
+            st.success("No discrepancies found ✅")
+
+    # ========== TAB 3: RECONCILIATION ==========
+    with tab3:
+        st.subheader("📊 Reconciliation Breakdown")
+
+        # Accession Level
+        st.markdown("### 🔹 Accession Level Reconciliation")
+        daily_accessions = set(daily_df["Accession"].astype(str))
+        txn_accessions = set(txn_df["Inv.#"].astype(str))
+
+        missing_in_txn = daily_accessions - txn_accessions
+        missing_in_daily = txn_accessions - daily_accessions
+
+        accession_recon = pd.DataFrame({
+            "Metric": ["Total in Daily Log", "Total in Transaction", "Missing in Transaction", "Missing in Daily Log"],
+            "Count": [len(daily_accessions), len(txn_accessions), len(missing_in_txn), len(missing_in_daily)]
+        })
+        st.table(accession_recon)
+
+        # CPT Level
+        st.markdown("### 🔹 CPT Level Reconciliation (per Accession)")
+        daily_cpt = daily_subset.groupby("Accession")["Test Code"].apply(set)
+        txn_cpt = txn_subset.groupby("Inv.#")["Code"].apply(set)
+
+        recon_rows = []
+        for acc in sorted(daily_accessions | txn_accessions):
+            d_codes = daily_cpt.get(acc, set())
+            t_codes = txn_cpt.get(acc, set())
+            recon_rows.append({
+                "Accession": acc,
+                "Daily Codes": ", ".join(d_codes) if d_codes else None,
+                "Txn Codes": ", ".join(t_codes) if t_codes else None,
+                "Missing in Transaction": ", ".join(d_codes - t_codes) if d_codes - t_codes else None,
+                "Missing in Daily Log": ", ".join(t_codes - d_codes) if t_codes - d_codes else None
+            })
+
+        cpt_recon_df = pd.DataFrame(recon_rows)
+        st.dataframe(cpt_recon_df)
