@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 import pandas as pd
 from io import BytesIO
@@ -81,12 +82,20 @@ if daily_file and txn_file:
     # Final cleaned DataFrame
     cleaned_daily_df = pd.DataFrame(cleaned_rows)
 
-    # ✅ Format all date columns as MM/DD/YYYY (including all possible date-like columns)
+    # ✅ Format all date columns as MM/DD/YYYY explicitly
     for col in cleaned_daily_df.columns:
         if any(x in col.lower() for x in ["date", "dob", "collected", "received", "billed"]):
-            cleaned_daily_df[col] = pd.to_datetime(
-                cleaned_daily_df[col], errors="coerce"
-            ).dt.strftime("%m/%d/%Y")
+            cleaned_daily_df[col] = (
+                pd.to_datetime(
+                    cleaned_daily_df[col]
+                    .astype(str)
+                    .str.replace(r"[-.]", "/", regex=True)
+                    .str.strip(),
+                    format="%m/%d/%Y",
+                    errors="coerce"
+                )
+                .dt.strftime("%m/%d/%Y")
+            )
 
     st.subheader("📑 Cleaned Daily Log Report")
     st.dataframe(cleaned_daily_df.head())
@@ -149,3 +158,4 @@ if daily_file and txn_file:
 
         cpt_recon_df = pd.DataFrame(recon_rows)
         st.dataframe(cpt_recon_df)
+```
