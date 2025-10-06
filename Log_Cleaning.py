@@ -45,13 +45,11 @@ if daily_file and txn_file:
         for idx, row in daily_df.iterrows():
             accession = str(row["Accession"]).strip()
             code = str(row.get("Test Code", "")).strip()
-
             row_dict = row.to_dict()
 
             if accession in txn_map:
                 if code in txn_map[accession]:
                     # ✅ Code exists in both
-                    # Add Test Name from transaction
                     row_dict["Test Name"] = txn_testname_map.get((accession, code), row_dict.get("Test Name", None))
                     cleaned_rows.append(row_dict)
                 else:
@@ -68,7 +66,6 @@ if daily_file and txn_file:
             missing_codes = txn_codes - daily_codes
             if missing_codes:
                 for code in missing_codes:
-                    # Take full row template from first row of daily_df with same accession (if exists)
                     if accession in daily_df["Accession"].astype(str).values:
                         template_row = daily_df[daily_df["Accession"].astype(str) == accession].iloc[0].to_dict()
                     else:
@@ -83,17 +80,17 @@ if daily_file and txn_file:
 
     # Final cleaned DataFrame
     cleaned_daily_df = pd.DataFrame(cleaned_rows)
-    
-    # ✅ Format all date columns as MM/DD/YYYY
+
+    # ✅ Format all date columns as MM/DD/YYYY (including all possible date-like columns)
     for col in cleaned_daily_df.columns:
-        if "date" in col.lower():
+        if any(x in col.lower() for x in ["date", "dob", "collected", "received", "billed"]):
             cleaned_daily_df[col] = pd.to_datetime(
                 cleaned_daily_df[col], errors="coerce"
             ).dt.strftime("%m/%d/%Y")
-    
+
     st.subheader("📑 Cleaned Daily Log Report")
     st.dataframe(cleaned_daily_df.head())
-    
+
     # Download option
     output = BytesIO()
     cleaned_daily_df.to_excel(output, index=False)
@@ -103,6 +100,7 @@ if daily_file and txn_file:
         file_name="Cleaned_Daily_Log_Report.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
     # ========== TAB 2: DISCREPANCY NOTES ==========
     with tab2:
         st.subheader("📝 Discrepancy Notes")
@@ -151,4 +149,3 @@ if daily_file and txn_file:
 
         cpt_recon_df = pd.DataFrame(recon_rows)
         st.dataframe(cpt_recon_df)
-
